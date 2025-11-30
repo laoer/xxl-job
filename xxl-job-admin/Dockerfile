@@ -14,7 +14,21 @@ COPY . .
 RUN mvn -s /root/.m2/settings.xml clean package -Dmaven.test.skip=true
 
 # Stage 2: Create the final Docker image
-FROM openjdk:21-jdk-slim
+# FROM openjdk:21-jdk-slim
+
+# 运行阶段
+FROM eclipse-temurin:21-jre-alpine
+
+# 设置构建参数，方便修改时区
+ARG TIMEZONE=Asia/Shanghai
+
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
+
+# 安装 tzdata 包并设置时区
+RUN apk add --no-cache tzdata && \
+    ln -sf /usr/share/zoneinfo/${TIMEZONE} /etc/localtime && \
+    echo "${TIMEZONE}" > /etc/timezone
+ENV TZ Asia/Shanghai
 
 # Maintainer
 MAINTAINER xuxueli
