@@ -38,13 +38,13 @@ pipeline {
                     
                     // 使用 sh 步骤直接执行 docker buildx 命令，并指定 platform
                     // --load 参数确保构建的镜像加载到本地 Docker deamon，以便后续步骤可以使用
-                    sh "docker buildx build --platform linux/arm64 --tag ${IMAGE_NAME}:${IMAGE_TAG} --file ${DOCKERFILE_PATH} . --load"
+                    sh "docker buildx build --platform linux/arm64 --tag ${IMAGE_NAME}-arm64:${IMAGE_TAG} --file ${DOCKERFILE_PATH} . --load"
 
                     echo "Docker image built successfully: ${IMAGE_NAME}:${IMAGE_TAG}"
 
                     // (可选) 推送镜像到 Docker Registry
                     // 因为镜像是通过 sh 命令构建的，需要通过 docker.image() 获取它的句柄
-                    def customImage = docker.image("${IMAGE_NAME}:${IMAGE_TAG}")
+                    // ef customImage = docker.image("${IMAGE_NAME}:${IMAGE_TAG}")
 
                     /*
                     docker.withRegistry('https://your.registry.com', 'your-registry-credentials-id') {
@@ -54,9 +54,17 @@ pipeline {
                     }
                     */
 
+					// 打上 latest 标签
+					echo "为镜像 ${IMAGE_NAME}:${IMAGE_TAG} 添加 latest 标签..."
+					sh "docker tag ${IMAGE_NAME}-arm64:${IMAGE_TAG} ${IMAGE_NAME}-arm64:latest"
+					echo "latest 标签添加完成."
+
+					// 保存 latest 标签的 Docker 镜像到指定路径
 					def saveDir = "/opt/output_images"
 					def tarFileName = "${saveDir}/${IMAGE_NAME}-arm64-latest.tar"
+					echo "正在将 Docker 镜像 ${IMAGE_NAME}-arm64:latest 保存到: ${tarFileName}..."
 					sh "docker save -o ${tarFileName} ${IMAGE_NAME}-arm64:latest"
+					echo "Docker 镜像已保存到: ${tarFileName}"
                 }
             }
         }
