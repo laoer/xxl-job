@@ -23,6 +23,7 @@ pipeline {
 		stage('Prepare Maven Settings') {
 			steps {
 				echo "Fetching custom Maven settings.xml..."
+				sh "chmod -R 755 ${env.WORKSPACE}"
 				withCredentials([file(credentialsId: MAVEN_SETTINGS_CREDENTIAL_ID, variable: 'MAVEN_SETTINGS_FILE')]) {
 					sh "cp ${env.MAVEN_SETTINGS_FILE} ./settings.xml"
 					echo "Custom settings.xml copied to workspace root."
