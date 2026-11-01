@@ -38,7 +38,7 @@
 
 ## 3. 数据 SQL 变更
 
-可直接执行的脚本见 **[`doc/db/upgrade_3.3.1_to_3.5.0.sql`](./db/upgrade_3.3.1_to_3.5.0.sql)**（含前置检查、大表注意事项）。脚本内容来自上游 3.4.0 / 3.5.0 两个版本的官方升级说明（`doc/XXL-JOB官方文档.md` 第 7.44、7.47 节），并按**本仓库当前库结构**做了对齐与补充。
+可直接执行的脚本见 **[`doc/db/upgrade_3.3.1_to_3.5.0.sql`](./db/upgrade_3.3.1_to_3.5.0.sql)**（生产可执行版：含 §0 升级前自检、大表 DDL 合并、token 直写生产值 `xxl-job-xy`）。脚本内容来自上游 3.4.0 / 3.5.0 两个版本的官方升级说明（`doc/XXL-JOB官方文档.md` 第 7.44、7.47 节），并按**本仓库当前库结构**做了对齐与补充；3.2.0 与 3.3.1-SNAPSHOT 的库结构经比对完全一致，因此同一份脚本也适用于 3.2.0 生产库。
 
 ### 3.1 必做变更一览
 
@@ -54,7 +54,7 @@
 | `xxl_job_log` | 新增 `i_job_group(job_group)`，删除 `I_jobid_jobgroup` | 调度日志按执行器维度查看/查询 | **大** |
 | `xxl_job_log` | 新增 `i_alarm_status(alarm_status)` | 失败告警巡检性能（3.5.0 新告警模型） | **大** |
 | `xxl_job_log` | 历史数据回填：`alarm_status=0 AND handle_code=200` → `1` | 避免升级后告警巡检反复扫历史成功日志；单次 1W 条，需循环执行到 0 行 | **大** |
-| `xxl_job_group` | 存量行补 `access_token`（脚本兜底写 `default_token`） | 不补则 Token 校验永远失败，执行器无法注册 | 小 |
+| `xxl_job_group` | 存量行补 `access_token`（脚本写入生产值 `xxl-job-xy`） | 不补则 Token 校验永远失败，执行器无法注册 | 小 |
 
 ### 3.2 `alarm_status` 语义变化（需要理解，否则会误判数据）
 
@@ -70,7 +70,7 @@
 ### 3.4 只增不改的部分（无需 SQL）
 
 - 新表 / 删表 / 删列：**没有**。3.3.1 → 3.5.0 全部是列改名、加列、加索引、改类型。
-- 全新部署直接用 `doc/db/tables_xxl_job.sql`（已更新为 3.5.0 版本，含 `default_token` 初始化数据，并新增 `OpenClaw示例任务` 种子任务）。
+- 全新部署直接用 `doc/db/tables_xxl_job.sql`（已更新为 3.5.0 版本，新增 `OpenClaw示例任务` 种子任务）。注意该脚本是官方版本，种子数据的 `access_token` 为示例值 `default_token`，生产需自行改成实际值（本项目为 `xxl-job-xy`）。
 
 ---
 
@@ -229,7 +229,7 @@ docker buildx imagetools inspect eclipse-temurin:21-jre-alpine              # �
 T0 前：
   1) 备份数据库；在预发环境完整演练第 3 节 SQL + 新版本发布；
   2) 统计 xxl_job_log 行数，评估 ALTER 耗时（TEXT 变更 + 索引重建）；
-  3) 确认所有执行器的 Token 方案（沿用旧全局 default_token，或按执行器分配新 Token）；
+  3) 确认所有执行器的 Token 方案（沿用现网统一值 `xxl-job-xy`，或按执行器分配新 Token）；
   4) 准备 Nginx/网关改动：/xxl-job-admin 前缀下线，根路径反代到 admin；探活改 /actuator/health。
 
 T0（维护窗口）：
@@ -270,7 +270,7 @@ T1 后：
 
 ## 9. 待确认/可选项
 
-1. **Token 策略**：全部沿用 `default_token`（改动最小，安全性弱）vs 每个执行器独立 Token（推荐，UI「执行器管理」可直接改，改完全量执行器配置同步）。
+1. **Token 策略**：当前统一使用 `xxl-job-xy`（与现网执行器配置一致，改动最小）；后续如需隔离，可在 UI「执行器管理」逐个改成独立 Token，并同步对应执行器的 `xxl.job.executor.accessToken`。
 2. **docker-compose**：是否按 5.4 调整 `build.context` 以适配本仓库 Dockerfile，或干脆只用 Jenkins 出的镜像。
 3. **是否把 `sync/upstream-3.5.0` 推送到 origin 并发 PR**（当前仅本地分支，未推送）。
 4. 上游 `master` 已是 `3.5.1-SNAPSHOT`（含 3.5.1 开发中的日志保留策略重构），本次按需求只同步到 v3.5.0 正式版。
