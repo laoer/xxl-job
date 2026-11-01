@@ -6,7 +6,7 @@
     <parent>
         <groupId>com.xuxueli</groupId>
         <artifactId>xxl-job-executor-samples</artifactId>
-        <version>3.3.1-SNAPSHOT</version>
+        <version>3.5.0</version>
     </parent>
     <artifactId>xxl-job-executor-sample-springboot-ai</artifactId>
     <packaging>jar</packaging>
@@ -16,21 +16,8 @@
     <url>https://www.xuxueli.com/</url>
 
     <properties>
-        <spring-ai.version>1.1.0</spring-ai.version>
-        <dify-java-client.version>1.2.2</dify-java-client.version>
-    </properties>
 
-    <dependencyManagement>
-        <dependencies>
-            <dependency>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-starter-parent</artifactId>
-                <version>${spring-boot.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-        </dependencies>
-    </dependencyManagement>
+    </properties>
 
     <dependencies>
         <!-- spring-boot-starter-web (spring-webmvc + tomcat) -->
@@ -48,21 +35,22 @@
         <dependency>
             <groupId>com.xuxueli</groupId>
             <artifactId>xxl-job-core</artifactId>
-            <version>${project.parent.version}</version>
         </dependency>
 
-        <!-- spring-ai -->
+        <!-- spring-ai: ollama  -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-ollama</artifactId>
-            <version>${spring-ai.version}</version>
         </dependency>
-
+        <!-- spring-ai: openai -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-openai</artifactId>
+        </dependency>
         <!-- dify -->
         <dependency>
             <groupId>io.github.imfangs</groupId>
             <artifactId>dify-java-client</artifactId>
-            <version>${dify-java-client.version}</version>
         </dependency>
 
     </dependencies>

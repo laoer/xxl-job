@@ -43,6 +43,9 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 # Copy the JAR file from the build stage to the final image
 COPY --from=build /workspace/xxl-job-admin/target/xxl-job-admin-*.jar /app.jar
 
+# expose port
+EXPOSE 8080
+
 # Command to run the application
 # log home: -e LOG_HOME=/data/applogs
 # jvm options: -e JAVA_OPTS="-Xms128m -Xmx128m"
