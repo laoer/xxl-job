@@ -149,7 +149,7 @@ xxl-job-admin-3.5.0.jar  xxl-job-admin-3.5.0-sources.jar  xxl-job-admin-3.5.0-ja
 
 而 Docker「通配符匹配到多个源文件时，目标必须是目录」——原来的 `COPY --from=build .../xxl-job-admin-*.jar /app.jar` 在 buildkit 下会直接报错。旧版本（3.3.1-SNAPSHOT）的父 POM 同样绑定了这两个插件，所以这是**合并前就存在的隐患，与本次升级无关**，但会让 Jenkins 出不了镜像。
 
-新 Dockerfile 做了三处调整（均不改变运行镜像的行为）：
+新 Dockerfile 做了四处调整（运行镜像的内容与行为等价）：
 
 1. 构建命令限定模块并跳过无关产物：
    ```dockerfile
@@ -171,6 +171,39 @@ xxl-job-admin-3.5.0.jar  xxl-job-admin-3.5.0-sources.jar  xxl-job-admin-3.5.0-ja
        cp "$jar" /app.jar
    ```
 3. 新增根目录 `.dockerignore`：排除 `.git`、`**/target`、`doc`、`docker` 等，构建上下文从 ~274MB 降到 ~7.5MB（Jenkins 的 buildx 需要上传上下文，这一步对构建时长影响明显）。已被排除的内容不参与编译；`settings.xml`、`pom.xml`、各模块 `pom.xml` 均保留。
+4. 适配「x86 构建机 + `--platform linux/arm64`」的跨平台构建（见下一条）。
+
+#### 跨平台构建：`exec /bin/sh: exec format error`
+
+Jenkins 用 `docker buildx build --platform linux/arm64` 出 arm64 镜像。如果构建机是 x86_64 且没有安装 QEMU binfmt，buildx 会把 arm64 的基础镜像拉下来，但**无法执行**其中任何进程，于是任何在目标平台上的 `RUN` 都会报：
+
+```
+exec /bin/sh: exec format error
+```
+
+这跟 Dockerfile 内容无关（原来的 `apk add tzdata`、`ln -sf` 也会踩到），根因是构建机缺少 arm64 用户态模拟。有两种解法：
+
+- **解法 A（改 Dockerfile，本次已采用，不需要动 Jenkins 机器）**：约定「构建阶段跑原生平台、运行阶段零 `RUN`」：
+  - 构建阶段固定 `FROM --platform=$BUILDPLATFORM maven:...`，编译在构建机原生架构上执行（jar 与架构无关）；
+  - 运行阶段的 `apk add tzdata` 挪到构建阶段完成，再 `COPY --from=build` 把 `zoneinfo` / `/etc/localtime` / `/etc/timezone` 复制进运行阶段；
+  - 运行阶段只剩 `FROM/ARG/ENV/COPY/EXPOSE/ENTRYPOINT`，**不执行任何目标平台进程**，因此无 QEMU 也能产出架构正确的 arm64 镜像。
+
+- **解法 B（改构建机，一劳永逸）**：给构建机装 binfmt，之后任何 Dockerfile 都能跨架构构建：
+  ```bash
+  docker run --privileged --rm tonistiigi/binfmt --install arm64
+  docker run --rm --platform linux/arm64 eclipse-temurin:21-jre-alpine java -version   # 验证
+  ```
+  装完 QEMU 后，解法 A 的写法依然可用（只是少跑了几步），也可以把运行阶段的 `RUN apk add tzdata` 改回去。
+
+判断当前构建机状态：
+
+```bash
+uname -m                                                                  # 构建机架构
+docker run --rm --platform linux/arm64 alpine uname -m                      # 报 exec format error = 缺 binfmt
+docker buildx imagetools inspect eclipse-temurin:21-jre-alpine              # 确认该 tag 有 linux/arm64
+```
+
+> 注意：解法 A 依赖「基础镜像的 arm64 variant 确实存在」。如果 `imagetools inspect` 看不到 `linux/arm64`，说明镜像源（私有仓库/加速器）缺架构，需要换镜像或换源；否则会构建成功但运行期报错。
 
 时区配置也顺手合并成一段（原来 `tzdata` 与时区符号链接设置重复了两次，结果等价）。`ENTRYPOINT`、`EXPOSE 8080`、`PARAMS/JAVA_OPTS/LOG_HOME` 变量用法保持原样，Jenkinsfile 无需改动。
 
@@ -224,6 +257,7 @@ T1 后：
 - [ ] `git diff upstream/3.5.0-release..HEAD --stat` 只有 `Jenkinsfile`、`xxl-job-admin/Dockerfile` 与本升级说明/脚本（4 个文件）
 - [ ] `mvn clean package -Dmaven.test.skip=true` 通过（JDK 17+）
 - [ ] Jenkins 上 `docker buildx build --platform linux/arm64 --file xxl-job-admin/Dockerfile . --load` 成功，镜像内 `/app.jar` 为可执行 jar（非 sources/javadoc）
+- [ ] 产出的镜像在目标 arm64 机器上能起来（`docker run --rm <image> java -version` 能打印 arm64 的版本）
 - [ ] SQL 脚本执行后 4 张表的 `SHOW CREATE TABLE` 与 `doc/db/tables_xxl_job.sql` 一致
 - [ ] `xxl_job_group.access_token` 无 NULL/空
 - [ ] 新调度中心访问根路径、Actuator `/actuator/health` 正常

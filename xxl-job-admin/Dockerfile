@@ -2,13 +2,25 @@
 # XXL-JOB Admin 镜像
 #
 # 构建上下文：仓库根目录
-#   Jenkinsfile: docker buildx build --file xxl-job-admin/Dockerfile . --load
+#   Jenkinsfile: docker buildx build --platform linux/arm64 --file xxl-job-admin/Dockerfile . --load
 # 前置条件：构建前需在上下文根目录存在 settings.xml（Jenkins 的
 #   "Prepare Maven Settings" 阶段用 maven-settings 凭据写入）
+#
+# 跨平台说明（重要）：
+#   Jenkins 以 `--platform linux/arm64` 构建，而构建机通常是 x86_64。构建机上若没有
+#   QEMU binfmt 支持，任何在“目标平台”上执行的 RUN 都会报
+#   `exec /bin/sh: exec format error`。因此本 Dockerfile 的约定是：
+#     - 构建阶段固定跑在构建机原生平台（FROM --platform=$BUILDPLATFORM），编译不依赖 QEMU；
+#     - 运行阶段（目标平台）只使用 COPY/ENV/EXPOSE/ENTRYPOINT，不执行任何 RUN 指令，
+#       时区数据在构建阶段安装后 COPY 进运行阶段。
+#   如果以后需要在运行阶段执行 RUN（apk/apt 装包、健康检查脚本等），构建机必须装 binfmt：
+#     docker run --privileged --rm tonistiigi/binfmt --install arm64
 # ---------------------------------------------------------------------------
 
-# ===== 阶段 1：构建 =====
-FROM maven:3.9.9-eclipse-temurin-21-alpine AS build
+# ===== 阶段 1：构建（构建机原生平台，不经过 QEMU）=====
+FROM --platform=$BUILDPLATFORM maven:3.9.9-eclipse-temurin-21-alpine AS build
+
+ARG TIMEZONE=Asia/Shanghai
 
 WORKDIR /workspace
 
@@ -38,17 +50,24 @@ RUN set -eu; \
     cp "$jar" /app.jar; \
     ls -l /app.jar
 
-# ===== 阶段 2：运行 =====
+# 时区数据：在本阶段（原生平台）安装，供运行阶段直接 COPY，
+# 这样运行阶段就不需要 apk（否则在无 QEMU 的构建机上会 exec format error）
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
+    apk add --no-cache tzdata && \
+    cp -L "/usr/share/zoneinfo/${TIMEZONE}" /etc/localtime.prepared && \
+    echo "${TIMEZONE}" > /etc/timezone.prepared
+
+# ===== 阶段 2：运行（目标平台，全部为 COPY/ENV，不执行任何 RUN）=====
 FROM eclipse-temurin:21-jre-alpine
 
 # 时区（--build-arg TIMEZONE=xxx 可覆盖）
 ARG TIMEZONE=Asia/Shanghai
 ENV TZ=${TIMEZONE}
 
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
-    apk add --no-cache tzdata && \
-    ln -sf /usr/share/zoneinfo/${TIMEZONE} /etc/localtime && \
-    echo "${TIMEZONE}" > /etc/timezone
+# 从构建阶段复制时区数据（zoneinfo 是架构无关的数据文件）
+COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=build /etc/localtime.prepared /etc/localtime
+COPY --from=build /etc/timezone.prepared /etc/timezone
 
 # Maintainer
 MAINTAINER xuxueli
