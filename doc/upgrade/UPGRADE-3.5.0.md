@@ -13,8 +13,9 @@
 | --- | --- |
 | 分支 | 从 `master` 新建 `sync/upstream-3.5.0`，`git merge upstream/3.5.0-release` 合并（保留双亲历史，后续可直接继续 merge 上游） |
 | 自定义文件 | `Jenkinsfile`（上游无此文件，无冲突，原样保留）；`xxl-job-admin/Dockerfile`（上游也改过，产生冲突，已保留本仓库的多阶段构建版本） |
-| Dockerfile 唯一合入的上游改动 | 新增 `EXPOSE 8080`（3.4.1 特性），其余保持本仓库的多阶段构建（`maven:3.9.9-eclipse-temurin-21-alpine` 构建 + `eclipse-temurin:21-jre-alpine` 运行 + 阿里云镜像源 + 时区） |
-| 与上游差异 | 合并提交处与 `upstream/3.5.0-release` **仅差 `Jenkinsfile`、`xxl-job-admin/Dockerfile`**；当前 HEAD 另多出本说明与 `doc/db/upgrade_3.3.1_to_3.5.0.sql`（`git diff --stat upstream/3.5.0-release..HEAD` 复核，共 4 个文件） |
+| Dockerfile 合入的上游改动 | 仅新增 `EXPOSE 8080`（3.4.1 特性），其余保持本仓库的多阶段构建（`maven:3.9.9-eclipse-temurin-21-alpine` 构建 + `eclipse-temurin:21-jre-alpine` 运行 + 阿里云镜像源 + 时区） |
+| Dockerfile 构建修复 | 见 5.4：`-pl xxl-job-admin -am` 只构建调度中心、跳过 sources/javadoc 包、精确选取可执行 jar；另新增根目录 `.dockerignore` 缩减构建上下文 |
+| 与上游差异 | 合并提交处与 `upstream/3.5.0-release` **仅差 `Jenkinsfile`、`xxl-job-admin/Dockerfile`**；当前 HEAD 另多出 `.dockerignore`、本说明与 `doc/db/upgrade_3.3.1_to_3.5.0.sql`（`git diff --stat upstream/3.5.0-release..HEAD` 复核，共 5 个文件） |
 
 上游 Dockerfile 的原生做法是把 `target/xxl-job-admin-*.jar` 直接 ADD 进 `eclipse-temurin:17-jre` 镜像；本仓库的 Dockerfile 是「镜像内编译」，两者定位不同，因此以本仓库版本为准。`COPY settings.xml` 依赖 Jenkins 在构建前通过 `maven-settings` 凭据写入工作区根目录（见 `Jenkinsfile` 的 *Prepare Maven Settings* 阶段），构建上下文必须是仓库根目录。
 
@@ -138,27 +139,40 @@
 - `.gitignore` 补充了 `**/target/`、`node_modules/`、`/dist/`、`package-lock.json`、`.claude`、`.specify`、`specs` 等规则（上游为 AI 友好性重构加入），对本仓库无副作用。
 - 版本号：`pom.xml` 已变为 `3.5.0`（正式版，非 SNAPSHOT）；`Jenkinsfile` 用 `BUILD_NUMBER` 打 tag，无需改动。
 
-#### ⚠️ 既有隐患（与本次升级无关，但会挡住镜像构建）
+#### 镜像构建修复（本次已改 Dockerfile）
 
-父 POM 的 `release` profile 默认激活，把 `maven-source-plugin` / `maven-javadoc-plugin` 绑到了 `package` 阶段，因此 `mvn package` 会在 `xxl-job-admin/target/` 下同时产出 3 个 jar：
+父 POM 的 `release` profile 默认激活，把 `maven-source-plugin` / `maven-javadoc-plugin` 绑到了 `package` 阶段，所以 `mvn package` 会在 `xxl-job-admin/target/` 下同时产出 3 个 jar：
 
 ```
 xxl-job-admin-3.5.0.jar  xxl-job-admin-3.5.0-sources.jar  xxl-job-admin-3.5.0-javadoc.jar
 ```
 
-而本仓库 Dockerfile 是：
+而 Docker「通配符匹配到多个源文件时，目标必须是目录」——原来的 `COPY --from=build .../xxl-job-admin-*.jar /app.jar` 在 buildkit 下会直接报错。旧版本（3.3.1-SNAPSHOT）的父 POM 同样绑定了这两个插件，所以这是**合并前就存在的隐患，与本次升级无关**，但会让 Jenkins 出不了镜像。
 
-```dockerfile
-COPY --from=build /workspace/xxl-job-admin/target/xxl-job-admin-*.jar /app.jar
-```
+新 Dockerfile 做了三处调整（均不改变运行镜像的行为）：
 
-Docker 的规则是「通配符匹配到多个源文件时，目标必须是目录」，这种写法在 buildkit 下会报 `must be a directory` 之类错误。旧版本（3.3.1-SNAPSHOT）的父 POM 同样绑定了这两个插件，因此**这是本次合并前就存在的问题，不是升级引入的**。建议在构建阶段禁用这两个插件（同时加快构建）：
+1. 构建命令限定模块并跳过无关产物：
+   ```dockerfile
+   RUN mvn -s /root/.m2/settings.xml -B -ntp \
+           -pl xxl-job-admin -am \
+           clean package \
+           -Dmaven.test.skip=true \
+           -Dmaven.source.skip=true \
+           -Dmaven.javadoc.skip=true
+   ```
+   `-pl xxl-job-admin -am` 只构建父 POM + core + admin（样例模块不再参与，构建更快、也不会被样例模块的第三方依赖影响）；`-Dmaven.source.skip/-Dmaven.javadoc.skip` 让 `target/` 下只留可执行 jar。
+2. jar 选取改为显式脚本，再 `COPY --from=build /app.jar`，彻底避开通配符多文件问题（即使将来 POM 变回产出 sources/javadoc 也不会挂）：
+   ```dockerfile
+   RUN set -eu; \
+       jar="$(ls -1 xxl-job-admin/target/xxl-job-admin-*.jar \
+           | grep -v -e '-sources\.jar$' -e '-javadoc\.jar$' \
+           | head -n 1)"; \
+       test -n "$jar"; \
+       cp "$jar" /app.jar
+   ```
+3. 新增根目录 `.dockerignore`：排除 `.git`、`**/target`、`doc`、`docker` 等，构建上下文从 ~274MB 降到 ~7.5MB（Jenkins 的 buildx 需要上传上下文，这一步对构建时长影响明显）。已被排除的内容不参与编译；`settings.xml`、`pom.xml`、各模块 `pom.xml` 均保留。
 
-```dockerfile
-RUN mvn -s /root/.m2/settings.xml clean package -Dmaven.test.skip=true -Dmaven.source.skip=true -Dmaven.javadoc.skip=true
-```
-
-或改为精确匹配（去掉 `-sources` / `-javadoc` 后再 COPY）。本次为遵循「保留自定义 Dockerfile」的要求，未擅自修改。
+时区配置也顺手合并成一段（原来 `tzdata` 与时区符号链接设置重复了两次，结果等价）。`ENTRYPOINT`、`EXPOSE 8080`、`PARAMS/JAVA_OPTS/LOG_HOME` 变量用法保持原样，Jenkinsfile 无需改动。
 
 ### 5.5 AI 执行器样例（仅样例，非必须）
 
@@ -209,6 +223,7 @@ T1 后：
 
 - [ ] `git diff upstream/3.5.0-release..HEAD --stat` 只有 `Jenkinsfile`、`xxl-job-admin/Dockerfile` 与本升级说明/脚本（4 个文件）
 - [ ] `mvn clean package -Dmaven.test.skip=true` 通过（JDK 17+）
+- [ ] Jenkins 上 `docker buildx build --platform linux/arm64 --file xxl-job-admin/Dockerfile . --load` 成功，镜像内 `/app.jar` 为可执行 jar（非 sources/javadoc）
 - [ ] SQL 脚本执行后 4 张表的 `SHOW CREATE TABLE` 与 `doc/db/tables_xxl_job.sql` 一致
 - [ ] `xxl_job_group.access_token` 无 NULL/空
 - [ ] 新调度中心访问根路径、Actuator `/actuator/health` 正常
@@ -225,4 +240,4 @@ T1 后：
 2. **docker-compose**：是否按 5.4 调整 `build.context` 以适配本仓库 Dockerfile，或干脆只用 Jenkins 出的镜像。
 3. **是否把 `sync/upstream-3.5.0` 推送到 origin 并发 PR**（当前仅本地分支，未推送）。
 4. 上游 `master` 已是 `3.5.1-SNAPSHOT`（含 3.5.1 开发中的日志保留策略重构），本次按需求只同步到 v3.5.0 正式版。
-5. Dockerfile 里 `COPY .../xxl-job-admin-*.jar` 的多 jar 匹配问题（见 5.4 的「既有隐患」）是否需要一并修掉——改法很小，但属于你的自定义文件，等你确认。
+5. Dockerfile 的 jar 选取多文件问题、样例模块参与构建问题已在本次修掉（见 5.4）；如果你希望构建时**连样例模块一起编译**（例如想用同一个镜像验证样例），把 `-pl xxl-job-admin -am` 去掉即可。

@@ -1,0 +1,20 @@
+# Docker 构建上下文忽略清单（构建上下文 = 仓库根目录）
+# 说明：调度中心镜像只需要 pom.xml、settings.xml、xxl-job-core、xxl-job-admin，
+#       以及各模块的 pom（Maven 需要读取完整 reactor 结构）。
+
+# VCS / IDE
+.git
+.gitattributes
+.github
+.idea
+*.iml
+.DS_Store
+
+# 本地构建产物（容器内会重新编译，避免把宿主机 target/ 拷进上下文）
+**/target
+
+# 与镜像构建无关的文档与本地编排
+doc
+docker
+Jenkinsfile
+README.md
